@@ -1,21 +1,31 @@
 import React from 'react';
 import { FlatList, StyleSheet, Text, View } from 'react-native';
 
-// Defina uma interface para suas mensagens
+// --- UPDATED Message Interface ---
 interface Message {
   id: string;
-  sender: 'user' | 'model';
+  sender: 'user' | 'model' | 'system'; // Allow 'system'
   text: string;
 }
 
 interface ConversationOverlayProps {
-  messages: Message[];
+  messages: Message[]; // Use the updated interface
 }
 
 const ConversationOverlay: React.FC<ConversationOverlayProps> = ({ messages }) => {
   const renderItem = ({ item }: { item: Message }) => (
-    <View style={[styles.messageBubble, item.sender === 'user' ? styles.userBubble : styles.modelBubble]}>
-      <Text style={styles.messageText}>{item.text}</Text>
+    <View style={[
+        styles.messageBubble,
+        item.sender === 'user' ? styles.userBubble :
+        item.sender === 'model' ? styles.modelBubble :
+        styles.systemBubble // Add style for system messages
+    ]}>
+      <Text style={[
+          styles.messageText,
+          item.sender === 'system' ? styles.systemText : null // Optional different text style
+      ]}>
+          {item.text}
+      </Text>
     </View>
   );
 
@@ -25,7 +35,7 @@ const ConversationOverlay: React.FC<ConversationOverlayProps> = ({ messages }) =
         data={messages}
         renderItem={renderItem}
         keyExtractor={(item) => item.id}
-        inverted // Mostra mensagens mais recentes na parte inferior
+        inverted // Show most recent messages at the bottom
         contentContainerStyle={styles.listContent}
       />
     </View>
@@ -35,37 +45,53 @@ const ConversationOverlay: React.FC<ConversationOverlayProps> = ({ messages }) =
 const styles = StyleSheet.create({
   container: {
     position: 'absolute',
-    top: 40, // Ajuste conforme necessário (abaixo da barra de status)
+    top: 40,
     left: 10,
     right: 10,
-    bottom: 90, // Ajuste conforme necessário (acima da ControlBar)
-    // backgroundColor: 'rgba(0, 0, 0, 0.1)', // Fundo sutil opcional
+    bottom: 90, // Adjust according to ControlBar height
     padding: 5,
   },
   listContent: {
-    paddingBottom: 10, // Espaço na parte inferior da lista
-     justifyContent: 'flex-end', // Alinha o conteúdo na parte inferior quando invertido
+    paddingBottom: 10,
+    justifyContent: 'flex-end', // Align content at the bottom when inverted
   },
   messageBubble: {
     maxWidth: '80%',
-    padding: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
     borderRadius: 15,
     marginBottom: 8,
   },
   userBubble: {
-    backgroundColor: '#DCF8C6', // Verde claro (tipo WhatsApp)
+    backgroundColor: '#DCF8C6', // Light green
     alignSelf: 'flex-end',
-    borderBottomRightRadius: 0,
+    borderBottomRightRadius: 5, // Slight adjustment for visual consistency
   },
   modelBubble: {
-    backgroundColor: '#E5E5EA', // Cinza claro
+    backgroundColor: '#E5E5EA', // Light gray
     alignSelf: 'flex-start',
-     borderBottomLeftRadius: 0,
+    borderBottomLeftRadius: 5, // Slight adjustment
+  },
+  // --- ADDED System Bubble Style ---
+  systemBubble: {
+    backgroundColor: '#f0f0f0', // Lighter gray or distinct color
+    alignSelf: 'center', // Center system messages
+    borderRadius: 8,
+    maxWidth: '90%',
+    paddingVertical: 4,
+    paddingHorizontal: 8,
   },
   messageText: {
     fontSize: 15,
-     color: '#000',
+    color: '#000',
   },
+   // --- ADDED Optional System Text Style ---
+   systemText: {
+       fontSize: 12,
+       color: '#555', // Darker gray text
+       fontStyle: 'italic',
+       textAlign: 'center',
+   },
 });
 
 export default ConversationOverlay;

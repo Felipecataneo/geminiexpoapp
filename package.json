@@ -17,6 +17,7 @@
     "@react-navigation/elements": "^2.3.8",
     "@react-navigation/native": "^7.1.6",
     "base-64": "^1.0.0",
+    "buffer": "^6.0.3",
     "eventemitter3": "^5.0.1",
     "expo": "~53.0.9",
     "expo-av": "~15.1.4",
