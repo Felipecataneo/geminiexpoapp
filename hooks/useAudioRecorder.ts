@@ -15,62 +15,84 @@ export interface UseAudioRecorderResult {
 }
 
 // --- Definição segura das opções de gravação ---
-// (Mantém a definição segura anterior)
 let recordingOptions: Audio.RecordingOptions | undefined = Audio.RecordingOptionsPresets.HIGH_QUALITY;
-if (!recordingOptions) { /* ... fallback manual ... */
+if (!recordingOptions) {
     console.warn("Audio.RecordingOptionsPresets.HIGH_QUALITY is undefined! Falling back to basic options.");
     recordingOptions = {
         android: {
-            extension: '.mp4',
-            outputFormat: Audio.AndroidOutputFormat.MPEG_4,
-            audioEncoder: Audio.AndroidAudioEncoder.AAC,
-            sampleRate: 44100,
-            numberOfChannels: 2,
-            bitRate: 128000,
+            extension: '.wav',
+            outputFormat: Audio.AndroidOutputFormat.DEFAULT,
+            audioEncoder: Audio.AndroidAudioEncoder.DEFAULT,
+            sampleRate: 16000,
+            numberOfChannels: 1,
+            bitRate: 16000 * 16 * 1,
         },
         ios: {
-            extension: '.m4a',
-            outputFormat: Audio.IOSOutputFormat.MPEG4AAC,
+            extension: '.wav',
+            outputFormat: Audio.IOSOutputFormat.LINEARPCM,
             audioQuality: Audio.IOSAudioQuality.MAX,
-            sampleRate: 44100,
-            numberOfChannels: 2,
-            bitRate: 128000,
+            sampleRate: 16000,
+            numberOfChannels: 1,
+            bitRate: 16000 * 16 * 1,
             linearPCMBitDepth: 16,
             linearPCMIsBigEndian: false,
             linearPCMIsFloat: false,
         },
         web: {
-            mimeType: 'audio/webm',
-            bitsPerSecond: 128000,
+            mimeType: 'audio/wav',
+            bitsPerSecond: 16000,
         },
     };
-} else { /* ... personalização segura ... */
+} else {
+    // Personalização segura para Android
     if (!recordingOptions.android) recordingOptions.android = {
-        extension: '.mp4',
-        outputFormat: Audio.AndroidOutputFormat.MPEG_4,
-        audioEncoder: Audio.AndroidAudioEncoder.AAC,
-        sampleRate: 44100,
-        numberOfChannels: 2,
-        bitRate: 128000,
+        extension: '.wav',
+        outputFormat: Audio.AndroidOutputFormat.DEFAULT,
+        audioEncoder: Audio.AndroidAudioEncoder.DEFAULT,
+        sampleRate: 16000,
+        numberOfChannels: 1,
+        bitRate: 16000 * 16 * 1,
     };
-    else { /* ... customize android ... */ recordingOptions.android.extension = '.mp4'; recordingOptions.android.outputFormat = Audio.AndroidOutputFormat.MPEG_4; }
+    else {
+        recordingOptions.android.extension = '.wav';
+        recordingOptions.android.outputFormat = Audio.AndroidOutputFormat.DEFAULT;
+        recordingOptions.android.audioEncoder = Audio.AndroidAudioEncoder.DEFAULT;
+        recordingOptions.android.sampleRate = 16000;
+        recordingOptions.android.numberOfChannels = 1;
+        recordingOptions.android.bitRate = 16000 * 16 * 1;
+    }
+
+    // Personalização segura para iOS
     if (!recordingOptions.ios) recordingOptions.ios = {
-        extension: '.m4a',
-        outputFormat: Audio.IOSOutputFormat.MPEG4AAC,
+        extension: '.wav',
+        outputFormat: Audio.IOSOutputFormat.LINEARPCM,
         audioQuality: Audio.IOSAudioQuality.MAX,
-        sampleRate: 44100,
-        numberOfChannels: 2,
-        bitRate: 128000,
+        sampleRate: 16000,
+        numberOfChannels: 1,
+        bitRate: 16000 * 16 * 1,
         linearPCMBitDepth: 16,
         linearPCMIsBigEndian: false,
         linearPCMIsFloat: false,
     };
-    else { /* ... customize ios ... */ recordingOptions.ios.extension = '.m4a'; recordingOptions.ios.outputFormat = Audio.IOSOutputFormat.MPEG4AAC; }
-    if (!recordingOptions.web) recordingOptions.web = { /* ... defaults ... */ };
+    else {
+        recordingOptions.ios.extension = '.wav';
+        recordingOptions.ios.outputFormat = Audio.IOSOutputFormat.LINEARPCM;
+        recordingOptions.ios.sampleRate = 16000;
+        recordingOptions.ios.numberOfChannels = 1;
+        recordingOptions.ios.bitRate = 16000 * 16 * 1;
+        recordingOptions.ios.linearPCMBitDepth = 16;
+        recordingOptions.ios.linearPCMIsBigEndian = false;
+        recordingOptions.ios.linearPCMIsFloat = false;
+    }
+
+    // Configuração para web
+    if (!recordingOptions.web) recordingOptions.web = {
+        mimeType: 'audio/wav',
+        bitsPerSecond: 16000,
+    };
 }
 recordingOptions.isMeteringEnabled = true;
 // --- Fim da definição segura ---
-
 
 export function useAudioRecorder(): UseAudioRecorderResult {
   const [isRecording, setIsRecording] = useState(false);
@@ -107,8 +129,7 @@ export function useAudioRecorder(): UseAudioRecorderResult {
     requestPermissions();
   }, [requestPermissions]);
 
-
-  // --- MOVER stopRecordingAndSend PARA ANTES de startRecording ---
+  // --- Parar gravação e enviar ---
   const stopRecordingAndSend = useCallback(async () => {
     if (!isRecording || !recordingRef.current) {
         if (isRecording) console.log('Stop called but isRecording is false or recordingRef is null.');
@@ -139,12 +160,16 @@ export function useAudioRecorder(): UseAudioRecorderResult {
                 encoding: FileSystem.EncodingType.Base64,
             });
 
-            let mimeType = 'audio/mp4'; // Default
+            // Determinar o tipo MIME com base na extensão
+            let mimeType = 'audio/wav'; // Default para PCM/WAV
             const extension = uri.split('.').pop()?.toLowerCase();
-            if (extension === 'm4a') {
+            if (extension === 'wav') {
+                // Usar formato PCM explícito se possível
+                mimeType = 'audio/l16; rate=16000; channels=1';
+            } else {
+                // Fallback se a extensão não for a esperada
                 mimeType = 'audio/m4a';
-            } else if (extension === 'mp4') {
-                mimeType = 'audio/mp4';
+                console.warn(`Unexpected audio extension: ${extension}, using fallback mimeType: ${mimeType}`);
             }
             console.log(`AUDIO: Preparing to send ${base64Data.length} base64 chars. MimeType: ${mimeType}`);
 
@@ -171,8 +196,7 @@ export function useAudioRecorder(): UseAudioRecorderResult {
       console.error('Failed during stop, unload, read or send:', err);
       setError(err);
     }
-  }, [isRecording, connected, client]); // Dependencies para stopRecordingAndSend
-
+  }, [isRecording, connected, client]);
 
   // --- Gravação ---
   const startRecording = useCallback(async () => {
@@ -199,31 +223,23 @@ export function useAudioRecorder(): UseAudioRecorderResult {
 
       if (recordingRef.current) {
           console.warn("Cleaning up previous recording instance before starting new one.");
-          // Chame stopRecordingAndSend para garantir a limpeza correta, se aplicável
-          // await stopRecordingAndSend(); // CUIDADO: pode causar loop se chamado incorretamente
-          // Ou apenas descarregue:
-           await recordingRef.current.stopAndUnloadAsync().catch(e => console.warn("Minor error unloading previous recording before start:", e));
+          await recordingRef.current.stopAndUnloadAsync().catch(e => console.warn("Minor error unloading previous recording before start:", e));
           recordingRef.current = null;
       }
 
       const { recording, status } = await Audio.Recording.createAsync(
           recordingOptions,
-          (status: Audio.RecordingStatus) => { // Tipo explícito aqui
-            // --- CORREÇÃO DO STATUS CALLBACK ---
-            // Apenas verifica isRecording e metering
+          (status: Audio.RecordingStatus) => {
             if (status.isRecording) {
                 const db = status.metering ?? -160;
                 const linearVolume = Math.max(0, Math.min(1, 1 + db / 60));
                 setVolumeIn(linearVolume);
             } else {
                  setVolumeIn(0);
-                 // Opcional: Log se parar inesperadamente (isDoneRecording)
                  if (status.isDoneRecording && isRecording) {
                      console.warn("Recording status indicates done, but component state is still 'recording'. Potential issue or pending stop.");
-                     // NÃO chame stopRecordingAndSend daqui para evitar loops infinitos.
                  }
             }
-            // Remover verificações de status.isLoaded e status.error
           },
           100
       );
@@ -239,10 +255,7 @@ export function useAudioRecorder(): UseAudioRecorderResult {
       setVolumeIn(0);
       recordingRef.current = null;
     }
-  // Removido stopRecordingAndSend das dependências de startRecording para evitar complexidade,
-  // a limpeza antes de iniciar é feita explicitamente acima.
   }, [hasPermission, isRecording, requestPermissions]);
-
 
    // --- Limpeza ---
    useEffect(() => {
@@ -254,14 +267,9 @@ export function useAudioRecorder(): UseAudioRecorderResult {
         recToClean.stopAndUnloadAsync()
           .then(() => console.log("Recording stopped cleanly on unmount."))
           .catch((e) => console.warn("Error stopping recording on cleanup:", e));
-        // Reset state on unmount regardless of previous state to prevent memory leaks
-        // Although state won't update after unmount, good practice.
-        // setIsRecording(false);
-        // setVolumeIn(0);
       }
     };
    }, []); // Empty deps for unmount cleanup
-
 
   return {
     isRecording,
