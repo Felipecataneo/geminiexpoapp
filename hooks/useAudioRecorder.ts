@@ -1,379 +1,339 @@
+// hooks/useAudioRecorder.ts
 import { Audio } from 'expo-av';
 import * as FileSystem from 'expo-file-system';
 import { PermissionStatus } from 'expo-modules-core';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useLiveAPIContext } from '../contexts/LiveAPIContext'; // Assuming correct path
+import { Platform } from 'react-native';
+import { useLiveAPIContext } from '../contexts/LiveAPIContext';
+import { arrayBufferToBase64, base64ToArrayBuffer } from '../lib/utils'; // Ensure this path is correct
 
-const RECORDING_CHUNK_DURATION_MS = 1000; // Record 1-second chunks
+const RECORDING_CHUNK_DURATION_MS = 1000;
 
 export interface UseAudioRecorderResult {
   isStreamingMic: boolean;
   volumeIn: number;
   startStreamingMicrophone: () => Promise<void>;
-  stopStreamingMicrophone: () => Promise<void>; // Keep this promise if needed elsewhere, otherwise void
+  stopStreamingMicrophone: () => Promise<void>; // Made async for await
   permissionResponse?: Audio.PermissionResponse;
   hasPermission: boolean | null;
   error: Error | null;
 }
 
-// Manually define recording options ensuring PCM format
+// --- Revert to Manual Options Targeting PCM 16kHz ---
 const recordingOptions: Audio.RecordingOptions = {
     android: {
-      extension: '.wav',
-      outputFormat: Audio.AndroidOutputFormat.DEFAULT,
-      audioEncoder: Audio.AndroidAudioEncoder.DEFAULT,
-      sampleRate: 16000,
+      extension: '.wav', // Use .wav, header stripping will be needed
+      outputFormat: Audio.AndroidOutputFormat.DEFAULT, // Default often yields WAV container
+      audioEncoder: Audio.AndroidAudioEncoder.DEFAULT,   // Default often yields PCM in WAV
+      sampleRate: 16000, // Explicitly 16kHz
       numberOfChannels: 1,
-      bitRate: 16000 * 16 * 1,
+      bitRate: 16000 * 16 * 1, // 16kHz * 16 bits * 1 channel = 256000
     },
     ios: {
-      extension: '.wav',
-      outputFormat: Audio.IOSOutputFormat.LINEARPCM,
-      audioQuality: Audio.IOSAudioQuality.MAX,
-      sampleRate: 16000,
+      extension: '.pcm', // iOS can usually handle raw PCM directly
+      outputFormat: Audio.IOSOutputFormat.LINEARPCM, // Explicitly PCM
+      audioQuality: Audio.IOSAudioQuality.MAX, // Use max quality PCM
+      sampleRate: 16000, // Explicitly 16kHz
       numberOfChannels: 1,
       bitRate: 16000 * 16 * 1,
       linearPCMBitDepth: 16,
       linearPCMIsBigEndian: false,
       linearPCMIsFloat: false,
     },
-    web: {
+    web: { // Not relevant for RN but keep for completeness
         mimeType: 'audio/wav',
         bitsPerSecond: 16000 * 16 * 1,
     },
-    isMeteringEnabled: true,
+    isMeteringEnabled: true, // Keep metering
 };
 
+
 export function useAudioRecorder(): UseAudioRecorderResult {
+  console.log("AUDIO_REC: Hook top level execution"); // Log mount/render
+
   const [isStreamingMic, setIsStreamingMic] = useState(false);
   const [volumeIn, setVolumeIn] = useState(0);
   const [permissionResponse, setPermissionResponse] = useState<Audio.PermissionResponse>();
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [error, setError] = useState<Error | null>(null);
+
   const recordingRef = useRef<Audio.Recording | null>(null);
-  const stopStreamingRef = useRef<boolean>(false);
+  const stopStreamingRef = useRef<boolean>(true);
   const isProcessingSegmentRef = useRef<boolean>(false);
+
   const { client, connected } = useLiveAPIContext();
 
-  // --- Permission Request ---
-   const requestPermissions = useCallback(async () => {
-     // console.log('AUDIO_REC: Requesting microphone permissions...'); // Keep essential logs for now
-     setError(null);
-     try {
-       await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
-       const response = await Audio.requestPermissionsAsync();
-       setPermissionResponse(response);
-       setHasPermission(response.status === PermissionStatus.GRANTED);
-       if (response.status !== PermissionStatus.GRANTED) {
-         console.warn('AUDIO_REC: Microphone permission not granted.');
-       } else {
-         console.log('AUDIO_REC: Microphone permission granted.');
-       }
-     } catch (err: any) {
-       console.error('AUDIO_REC: Error requesting mic permissions/setting mode:', err);
-       setError(err);
-       setHasPermission(false);
-     }
-   }, []); // No dependencies needed
+  const requestPermissions = useCallback(async () => {
+    // console.log('AUDIO_REC: requestPermissions called'); // Less verbose
+    setError(null);
+    try {
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+      const response = await Audio.requestPermissionsAsync();
+      setPermissionResponse(response);
+      setHasPermission(response.status === PermissionStatus.GRANTED);
+      console.log(`AUDIO_REC: Permissions status: ${response.status}`);
+    } catch (err: any) {
+      console.error('AUDIO_REC: Error requesting permissions:', err);
+      setError(err);
+      setHasPermission(false);
+    }
+  }, []);
 
-   useEffect(() => {
-     // Request permissions when the hook mounts
-     requestPermissions();
-   }, [requestPermissions]); // Correct dependency
+  useEffect(() => {
+    console.log("AUDIO_REC: Permission effect running");
+    requestPermissions();
+  }, [requestPermissions]);
 
-  // --- Stop Function ---
-  // *** CHANGE 1: Stabilize stopStreamingMicrophone ***
-  // Removed isStreamingMic from dependency array. It primarily uses refs and sets state without needing the previous value.
-   const stopStreamingMicrophone = useCallback(async () => {
-     // Use refs for the most up-to-date status check
-     if (stopStreamingRef.current) {
-        console.log("AUDIO_REC: Stop called but already stopping/stopped.");
-        return;
-     }
-     // Optional: Check state if needed for UI logic before setting ref, but ref is key for loop control
-    //  if (!isStreamingMic && !isProcessingSegmentRef.current) {
-    //     console.log("AUDIO_REC: Stop called but not streaming or processing (state check).");
-    //     // If we bail here, make sure stopStreamingRef is still false if it wasn't set
-    //     return;
-    //  }
+  // --- Stable Stop Function ---
+  const stopStreamingMicrophone = useCallback(async () => {
+    console.log(`AUDIO_REC: stopStreamingMicrophone called (stopRef: ${stopStreamingRef.current}, processingRef: ${isProcessingSegmentRef.current})`);
 
-     console.log('AUDIO_REC: Stopping microphone streaming...');
-     stopStreamingRef.current = true; // Signal the loop and other operations to stop *first*
-
-     // Update state AFTER signaling stop to ensure loop sees the ref change
-     setIsStreamingMic(false);
-     setVolumeIn(0);
-
-      // Clean up any active recording instance *using refs*
-      const currentRecording = recordingRef.current; // Capture ref value
-      recordingRef.current = null; // Clear ref immediately
-
-      if (currentRecording) {
-          console.log("AUDIO_REC: Stop: Attempting to stop active recording instance...");
-          try {
-              await currentRecording.stopAndUnloadAsync();
-              console.log("AUDIO_REC: Stop: Recording stopped and unloaded.");
-              const uri = currentRecording.getURI();
-              if (uri) {
-                  // console.log("AUDIO_REC: Stop: Deleting partial segment file:", uri); // Optional log
-                  await FileSystem.deleteAsync(uri, { idempotent: true }).catch(e => console.warn("AUDIO_REC: Stop: Failed to delete partial segment file:", e));
-              }
-          } catch (e) {
-              console.warn("AUDIO_REC: Stop: Error stopping active recording:", e);
-              // Attempt deletion even if stop failed, URI might still be valid
-              const uri = currentRecording.getURI();
-              if (uri) {
-                  // console.log("AUDIO_REC: Stop: Attempting delete after error for URI:", uri); // Optional log
-                   await FileSystem.deleteAsync(uri, { idempotent: true }).catch(err => console.warn("AUDIO_REC: Stop: Failed to delete partial segment file after stop error:", err));
-              }
-          }
-      } else {
-          console.log("AUDIO_REC: Stop: No active recording instance found to stop.");
-      }
-
-      // Reset processing flag defensively
-      isProcessingSegmentRef.current = false;
-
-   }, []); // *** KEY CHANGE: Empty dependency array stabilizes this function ***
-
-
-  // --- Core Streaming Loop ---
-  const recordAndSendSegment = useCallback(async () => {
-    // *** CHANGE 3: Added More Checks ***
-    // Check stop signal immediately
     if (stopStreamingRef.current) {
-        console.log("AUDIO_REC: Loop start check: Stop signal received.");
-        isProcessingSegmentRef.current = false; // Ensure flag is reset if we exit early
+        console.log("AUDIO_REC: Stop: Already stopped or stop signal set.");
+        // No need to update state here if already stopped.
         return;
     }
 
-    // Prevent overlapping executions
+    stopStreamingRef.current = true;
+    console.log('AUDIO_REC: Stop: Signaled to stop.');
+
+    // Directly set state without reading previous values
+    // We assume that if this function is called, the intention is to stop.
+    setIsStreamingMic(false);
+    setVolumeIn(0);
+
+    const currentRecording = recordingRef.current;
+    recordingRef.current = null;
+
+    if (currentRecording) {
+        console.log("AUDIO_REC: Stop: Attempting cleanup for active recording instance...");
+        let recordingUri: string | null = null;
+        try {
+            recordingUri = currentRecording.getURI();
+            await currentRecording.stopAndUnloadAsync();
+            console.log("AUDIO_REC: Stop: Recording stopped and unloaded.");
+        } catch (e: any) {
+            console.warn("AUDIO_REC: Stop: Error during stopAndUnloadAsync:", e.message);
+        } finally {
+            if (recordingUri) {
+                await FileSystem.deleteAsync(recordingUri, { idempotent: true })
+                    .catch(delErr => console.warn("AUDIO_REC: Stop: Failed to delete file:", delErr));
+            }
+        }
+    } else {
+        console.log("AUDIO_REC: Stop: No active recording instance found.");
+    }
+    isProcessingSegmentRef.current = false;
+    console.log("AUDIO_REC: stopStreamingMicrophone finished.");
+  }, []); // <<< EMPTIED dependency array
+
+
+  // --- Core Loop ---
+  const recordAndSendSegment = useCallback(async () => {
+    console.log(`AUDIO_REC: recordAndSendSegment entered (stopRef: ${stopStreamingRef.current}, processingRef: ${isProcessingSegmentRef.current})`); // Add log
+
+    if (stopStreamingRef.current) {
+        console.log("AUDIO_REC: Loop: Stop signal detected at start, exiting loop."); // Add log
+        isProcessingSegmentRef.current = false;
+        if (isStreamingMic) setIsStreamingMic(false);
+        return;
+    }
+
     if (isProcessingSegmentRef.current) {
-        console.warn("AUDIO_REC: Loop start check: Already processing a segment.");
+         console.warn("AUDIO_REC: Loop: Already processing, rescheduling check."); // Add log
+        requestAnimationFrame(recordAndSendSegment);
         return;
     }
 
-    // Use direct check on 'connected' state from context
     if (!connected || !client) {
-        console.warn("AUDIO_REC: Not connected or client missing, stopping stream.");
-        await stopStreamingMicrophone(); // Call the stable stop function
+         console.warn("AUDIO_REC: Loop: Not connected, stopping stream."); // Add log
+        await stopStreamingMicrophone();
         return;
     }
 
     isProcessingSegmentRef.current = true;
     let segmentUri: string | null = null;
-    let recordingInstance: Audio.Recording | null = null; // Keep track of the specific instance for this segment
+    let localRecordingInstance: Audio.Recording | null = null;
 
     try {
-        // *** CHANGE 3: Added More Checks ***
-        if (stopStreamingRef.current) {
-            console.log("AUDIO_REC: Pre-recording check: Stop signal received.");
-            throw new Error("Streaming stopped before new segment recording could start."); // Throw to enter finally block for cleanup
-        }
+        console.log("AUDIO_REC: Loop: Setting audio mode..."); // Add log
+        await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
 
-        // 1. Start short recording
-        // console.log("AUDIO_REC: Creating new recording..."); // Optional log
-        await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true }); // Ensure mode is set
-
-        // Defensive cleanup of previous instance if somehow left hanging (shouldn't happen often with ref clearing)
-        if (recordingRef.current) {
-            console.warn("AUDIO_REC: Cleaning up unexpected previous recording instance before new one.");
-            await recordingRef.current.stopAndUnloadAsync().catch(e => console.warn("AUDIO_REC: Minor error unloading previous recording:", e));
+        if (recordingRef.current) { // Defensive cleanup
+             console.warn("AUDIO_REC: Loop: Cleaning up unexpected previous recording instance.");
+            await recordingRef.current.stopAndUnloadAsync().catch(e => {});
             recordingRef.current = null;
         }
 
-        const { recording, status } = await Audio.Recording.createAsync(
-            recordingOptions,
-            (status: Audio.RecordingStatus) => {
-                if (status.isRecording) {
-                    const db = status.metering ?? -160; // Use -160 as minimum dB for volume calculation
-                    const linearVolume = Math.max(0, Math.min(1, 1 + db / 60)); // Adjust scaling if needed
-                    setVolumeIn(linearVolume);
-                } else if (!status.isDoneRecording) { // Only reset volume if NOT done (i.e., unexpectedly stopped)
-                    setVolumeIn(0);
-                }
-            },
-            100 // Interval for metering updates
+        console.log("AUDIO_REC: Loop: Creating new recording instance..."); // Add log
+        const { recording } = await Audio.Recording.createAsync(
+            recordingOptions, // Use manual options
+            (statusUpdate: Audio.RecordingStatus) => {
+                 if (!isProcessingSegmentRef.current || stopStreamingRef.current) return;
+                 if (statusUpdate.isRecording) {
+                     const db = statusUpdate.metering ?? -160;
+                     const linearVolume = Math.max(0, Math.min(1, 1 + db / 60));
+                     // Check if state update is needed to avoid unnecessary renders
+                     setVolumeIn(currentVol => currentVol !== linearVolume ? linearVolume : currentVol);
+                 } else if (!statusUpdate.isDoneRecording) {
+                     // Check if state update is needed
+                     setVolumeIn(currentVol => currentVol !== 0 ? 0 : currentVol);
+                 }
+             }, 100
         );
-        recordingInstance = recording;
-        recordingRef.current = recording; // Store the current recording instance
-        // console.log("AUDIO_REC: Recording started..."); // Optional log
+        localRecordingInstance = recording;
+        recordingRef.current = recording;
+        console.log("AUDIO_REC: Loop: Recording instance created."); // Add log
 
-        // Wait for the chunk duration
         await new Promise(resolve => setTimeout(resolve, RECORDING_CHUNK_DURATION_MS));
+        console.log("AUDIO_REC: Loop: Wait finished."); // Add log
 
-        // *** CHANGE 3: Added More Checks ***
-        // Check stop signal *again* after waiting, and also ensure the recording instance is still the one we started
-        if (stopStreamingRef.current || recordingRef.current !== recordingInstance) {
-            console.log("AUDIO_REC: Stop signal received or recording instance changed during wait/record.");
-            // No need to stop/unload here, finally block will handle the current 'recordingInstance' if it exists
-            throw new Error("Streaming stopped or recording instance mismatch during segment processing."); // Throw to enter finally block
+        if (stopStreamingRef.current || recordingRef.current !== localRecordingInstance) {
+            throw new Error("Streaming stopped or recording instance mismatch during wait.");
         }
 
-        // 2. Stop recording *gracefully*
-        // console.log("AUDIO_REC: Stopping segment recording..."); // Optional log
-        await recordingInstance.stopAndUnloadAsync();
-        // console.log("AUDIO_REC: Segment recording stopped and unloaded."); // Optional log
-        segmentUri = recordingInstance.getURI();
-        recordingRef.current = null; // Clear the ref *after* successful stop and URI retrieval
-        // recordingInstance = null; // Redundant now as it's scoped, but for clarity
+        if (localRecordingInstance) {
+             console.log("AUDIO_REC: Loop: Stopping and unloading segment recording..."); // Add log
+             await localRecordingInstance.stopAndUnloadAsync();
+             segmentUri = localRecordingInstance.getURI();
+             if (recordingRef.current === localRecordingInstance) recordingRef.current = null;
+             localRecordingInstance = null;
+             console.log("AUDIO_REC: Loop: Segment stopped, URI:", segmentUri); // Add log
+        } else { throw new Error('Recording instance lost before stop.'); }
 
-        if (!segmentUri) {
-            throw new Error('AUDIO_REC: Failed to get segment URI after stopping recording.');
-        }
-        // console.log("AUDIO_REC: Segment URI obtained:", segmentUri); // Optional log
+        if (!segmentUri) { throw new Error('Failed to get segment URI.'); }
 
-        // 3. Read and Send segment
-        // *** CHANGE 3: Added More Checks ***
-        if (stopStreamingRef.current) {
-             throw new Error("Streaming stopped before segment could be sent.");
-        }
+        if (stopStreamingRef.current) { throw new Error("Streaming stopped before segment send."); }
 
         if (connected && client) {
-            const fileInfo = await FileSystem.getInfoAsync(segmentUri);
-            if (!fileInfo.exists) {
-                throw new Error(`AUDIO_REC: Segment file does not exist at URI: ${segmentUri}`);
-            }
-            // console.log(`AUDIO_REC: Reading segment file (size: ${fileInfo.size})...`); // Optional log
+             console.log("AUDIO_REC: Loop: Reading segment file..."); // Add log
+             const fileInfo = await FileSystem.getInfoAsync(segmentUri);
+             if (!fileInfo.exists || !fileInfo.size) { throw new Error(`Segment file invalid: ${segmentUri}`);}
 
-            const base64Data = await FileSystem.readAsStringAsync(segmentUri, {
-                encoding: FileSystem.EncodingType.Base64,
-            });
+             let base64Data = await FileSystem.readAsStringAsync(segmentUri, { encoding: FileSystem.EncodingType.Base64 });
+             let mimeType = 'audio/pcm;rate=16000';
 
-            // Ensure correct MIME type for L16
-            const mimeType = 'audio/l16; rate=16000; channels=1';
-            // console.log("AUDIO_REC: Sending segment data..."); // Optional log
-
-            client.sendRealtimeInput([
-                { mimeType: mimeType, data: base64Data },
-            ]);
-            // console.log("AUDIO_REC: Segment sent."); // Optional log
-
-        } else {
-             console.warn("AUDIO_REC: Client disconnected before segment could be sent.");
-             // No need to call stopStreamingMicrophone here, the loop will naturally stop on next iteration check or cleanup will handle it
-        }
+             // Use manual options, apply header stripping only for Android .wav
+             if (Platform.OS === 'android' && recordingOptions.android.extension === '.wav') {
+                 try {
+                    const buffer = base64ToArrayBuffer(base64Data);
+                    if (buffer.byteLength > 44) {
+                        const riff = String.fromCharCode(...new Uint8Array(buffer, 0, 4));
+                        const wave = String.fromCharCode(...new Uint8Array(buffer, 8, 4));
+                        if (riff === 'RIFF' && wave === 'WAVE') {
+                            console.log("AUDIO_REC: Loop: Stripping WAV header from Android data.");
+                            base64Data = arrayBufferToBase64(buffer.slice(44));
+                        }
+                    }
+                 } catch (stripError) {console.error("Strip error:", stripError)}
+             }
+             console.log(`AUDIO_REC: Loop: Sending data (MIME: ${mimeType}, Size: ${base64Data.length})`); // Add log
+             client.sendRealtimeInput([{ mimeType: mimeType, data: base64Data }]);
+             console.log("AUDIO_REC: Loop: Data sent."); // Add log
+        } else { console.warn("AUDIO_REC: Loop: Client disconnected before send."); }
 
     } catch (err: any) {
-        console.error('AUDIO_REC: Error during segment processing:', err.message); // Log only message for brevity
-        // Don't set generic error state here unless it's fatal, let stop handle things
-        await stopStreamingMicrophone(); // Ensure stop is called on error
+        console.error('AUDIO_REC: Loop: Error caught:', err.message);
+        if (err.message.includes("createAsync")) {
+            setError(new Error(`Failed to create recording: ${err.message}`));
+        }
+        if (!stopStreamingRef.current) { await stopStreamingMicrophone(); }
     } finally {
-        // console.log("AUDIO_REC: Entering finally block for segment processing..."); // Optional log
-        // 4. Clean up segment file
+         console.log("AUDIO_REC: Loop: Finally block executing."); // Add log
         if (segmentUri) {
-            // console.log("AUDIO_REC: Finally: Deleting segment file:", segmentUri); // Optional log
-            await FileSystem.deleteAsync(segmentUri, { idempotent: true })
-                .catch(e => console.warn("AUDIO_REC: Finally: Failed to delete segment file:", e));
+             await FileSystem.deleteAsync(segmentUri, { idempotent: true }).catch(e => {});
         }
-
-        // Defensive cleanup for the recording instance created in *this* iteration, in case of errors before stopAndUnloadAsync
-        if (recordingInstance && recordingRef.current === recordingInstance) {
-             console.warn("AUDIO_REC: Finally: Recording ref still pointing to this segment's instance. Cleaning up.");
-             try {
-                 await recordingInstance.stopAndUnloadAsync();
-             } catch(e) {
-                 console.warn("AUDIO_REC: Finally: Error during defensive stop/unload:", e);
-             }
-             recordingRef.current = null;
+        if (localRecordingInstance) {
+             try { await localRecordingInstance.stopAndUnloadAsync(); } catch(e){}
         }
-        // If recordingRef was already nullified after successful stop, this check prevents double-stopping
-
-        isProcessingSegmentRef.current = false; // Release the lock
-
-        // 5. Schedule next segment only if stop signal is NOT set
+        isProcessingSegmentRef.current = false;
         if (!stopStreamingRef.current) {
-            // console.log("AUDIO_REC: Scheduling next segment..."); // Optional log
-             requestAnimationFrame(recordAndSendSegment); // Schedule the *next* call
+             console.log("AUDIO_REC: Loop: Scheduling next frame."); // Add log
+             requestAnimationFrame(recordAndSendSegment);
         } else {
-             console.log("AUDIO_REC: Streaming loop finished (stop signal was set).");
-             // Ensure state reflects stopped status if loop finishes due to stop signal
-             // setIsStreamingMic(false); // Already done in stopStreamingMicrophone
+             console.log("AUDIO_REC: Loop: Stop signal is set, loop ending."); // Add log
+             if (isStreamingMic) setIsStreamingMic(false);
         }
     }
-  // Dependencies: Include functions/values from external scope that the callback's logic depends on.
-  // client/connected: Used for sending data and checking connection.
-  // stopStreamingMicrophone: Called on error/disconnect. It's stable now.
-}, [client, connected, stopStreamingMicrophone]); // Removed isStreamingMic
+  // Stabilized stopStreamingMicrophone. Need context, state, and setters.
+  }, [client, connected, stopStreamingMicrophone, isStreamingMic, volumeIn, setVolumeIn]);
 
 
-  // --- Control Functions ---
+  // --- Start Function ---
   const startStreamingMicrophone = useCallback(async () => {
-    // Use refs for immediate state checks to avoid race conditions
-    if (isStreamingMic || isProcessingSegmentRef.current || !stopStreamingRef.current === false /* redundant check, means it's starting/running */) {
-      console.warn(`AUDIO_REC: Start called but already streaming (isStreamingMic=${isStreamingMic}), processing (isProcessingSegmentRef=${isProcessingSegmentRef.current}), or stop signal not reset? (stopStreamingRef=${stopStreamingRef.current}).`);
+    console.log(`AUDIO_REC: startStreamingMicrophone called (isStreamingMic: ${isStreamingMic}, stopRef: ${stopStreamingRef.current})`);
+
+    if (isStreamingMic || !stopStreamingRef.current) {
+      console.warn(`AUDIO_REC: Start: Already streaming or not stopped.`);
       return;
     }
+    isProcessingSegmentRef.current = false;
 
     if (!connected || !client) {
-       console.warn('AUDIO_REC: Cannot start streaming, client not connected.');
        setError(new Error('Cannot start streaming: Client not connected.'));
        return;
     }
 
-    // Check permission state directly
-    let currentPermission = hasPermission;
-    if (currentPermission !== true) {
-      console.warn('AUDIO_REC: Permission not granted or unknown. Requesting...');
-      await requestPermissions(); // Request and wait
-      // Re-check permission status *after* requesting
-      const permissionCheck = await Audio.getPermissionsAsync();
-      currentPermission = permissionCheck.status === PermissionStatus.GRANTED;
-      setHasPermission(currentPermission); // Update state
-      setPermissionResponse(permissionCheck); // Update response state
+    // Ensure permissions
+    if (hasPermission !== true) {
+        console.log("AUDIO_REC: Start: Requesting permissions...");
+        await requestPermissions();
+        // We need to check the result *after* the await completes.
+        // The state update might not be immediate, so check permissionResponse.
+        const currentPermStatus = permissionResponse?.status ?? (await Audio.getPermissionsAsync()).status;
+        if (currentPermStatus !== PermissionStatus.GRANTED) {
+             setError(new Error('Microphone permission required.'));
+             console.error('AUDIO_REC: Start: Permission was denied.');
+             return;
+        }
+         // If permission was granted, update state if it wasn't already
+         if (!hasPermission) setHasPermission(true);
+         if (!permissionResponse || permissionResponse.status !== currentPermStatus) {
+             // Fetch again if state seems out of sync
+             setPermissionResponse(await Audio.getPermissionsAsync());
+         }
+         console.log("AUDIO_REC: Start: Permissions OK.");
     }
 
-    if (currentPermission !== true) {
-           setError(new Error('Cannot start streaming without microphone permission.'));
-           console.error('AUDIO_REC: Start failed: Microphone permission refused.');
-           return; // Exit if permission was not granted
-    }
 
-    console.log('AUDIO_REC: Starting microphone streaming...');
-    setError(null); // Clear previous errors
-    stopStreamingRef.current = false; // Explicitly reset stop signal *before* starting
-    isProcessingSegmentRef.current = false; // Reset processing flag just in case
-    recordingRef.current = null; // Ensure no stale recording ref
-    setIsStreamingMic(true); // Set state to indicate streaming
+    console.log('AUDIO_REC: Start: Initiating streaming...');
+    setError(null);
+    stopStreamingRef.current = false; // Signal start
+    recordingRef.current = null;
+    setIsStreamingMic(true); // Update UI state
 
-    // Start the loop using requestAnimationFrame for smoother scheduling
-    requestAnimationFrame(recordAndSendSegment);
+    // Use setTimeout to schedule the first frame slightly after the current render cycle
+    // This might help if the state update setIsStreamingMic is causing immediate issues
+    // requestAnimationFrame(recordAndSendSegment); // Original
+    setTimeout(recordAndSendSegment, 0); // Schedule with setTimeout
 
-  // Dependencies: Include everything from the outer scope that this function reads or calls.
-  // hasPermission, isStreamingMic: State values read directly.
-  // requestPermissions: Function called.
-  // recordAndSendSegment: Function called.
-  // connected, client: Context values read directly.
-}, [hasPermission, isStreamingMic, requestPermissions, recordAndSendSegment, connected, client]);
+    console.log('AUDIO_REC: Start: First loop scheduled.');
+
+  // Dependencies: isStreamingMic state is read here. Need context and permission state/funcs.
+  }, [hasPermission, requestPermissions, recordAndSendSegment, connected, client, isStreamingMic, permissionResponse, setHasPermission, setPermissionResponse]);
 
 
-   // --- Cleanup Effect ---
-   // *** CHANGE 2: Use stable stop function in dependency array ***
-   useEffect(() => {
-    // This function runs ONLY when the component using the hook unmounts.
+  // --- Cleanup Effect ---
+  useEffect(() => {
+    console.log("AUDIO_REC: Cleanup effect setup.");
+    const stableStopFn = stopStreamingMicrophone; // Capture stable reference
     return () => {
-      console.log("AUDIO_REC: Cleaning up hook on unmount...");
-      // Ensure stop is signaled and resources are cleaned up.
-      // Call the stabilized useCallback version of stopStreamingMicrophone.
-      if (!stopStreamingRef.current) { // Avoid logging/calling stop again if it was already called explicitly
-          stopStreamingMicrophone();
+      console.log("AUDIO_REC: Cleanup effect running (Unmounting).");
+      if (stopStreamingRef.current === false) {
+          console.log("AUDIO_REC: Cleanup: stopStreamingRef was false, calling stop.");
+          stableStopFn(); // Use stable reference
       } else {
-          console.log("AUDIO_REC: Unmount: Stop signal already set.");
-          // Optionally, add extra checks here to ensure cleanup happened if paranoid
           const rec = recordingRef.current;
-          if(rec) {
-              console.warn("AUDIO_REC: Unmount: Recording ref was not null despite stop signal. Attempting cleanup again.");
+          if (rec) {
+              console.warn("AUDIO_REC: Cleanup: Found lingering recording ref.");
               recordingRef.current = null;
-              rec.stopAndUnloadAsync().catch(e => console.warn("AUDIO_REC: Unmount: Error during redundant cleanup:", e));
-              // File deletion might be missed here if stopStreamingMicrophone didn't run fully
+              rec.stopAndUnloadAsync().catch(e => {});
           }
       }
     };
-   // Depend on the stable stop function reference. React Hook Lint rules prefer this.
-   // Because stopStreamingMicrophone now has `[]` deps, its reference is stable,
-   // so this effect's cleanup will only run on unmount, as intended.
-   }, [stopStreamingMicrophone]);
+  }, [stopStreamingMicrophone]); // Depend only on stable stop function
 
+  console.log("AUDIO_REC: Hook rendering/re-rendering complete."); // Add log
   return {
     isStreamingMic,
     volumeIn,

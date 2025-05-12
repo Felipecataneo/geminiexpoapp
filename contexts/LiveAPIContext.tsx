@@ -11,7 +11,7 @@ import { useLiveAPI, UseLiveAPIResults } from '../hooks/useLiveAPI'; // Ajuste o
 // Define um valor padrão ou nulo para o contexto inicial
 const defaultContextValue: UseLiveAPIResults = {
   client: null as any, // Será inicializado no hook
-  config: { model: 'models/gemini-2.0-flash-exp' }, // Modelo padrão inicial
+  config: { model: 'models/gemini-2.0-flash-live-001' }, // Modelo padrão inicial
   connected: false,
   isConnecting: false,
   error: null,
