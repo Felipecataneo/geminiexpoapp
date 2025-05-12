@@ -1,11 +1,12 @@
-import { Audio, InterruptionModeAndroid, InterruptionModeIOS } from 'expo-av';
+import { Audio, AVPlaybackStatus, InterruptionModeAndroid, InterruptionModeIOS } from 'expo-av'; // Importar tipos de status
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   MultimodalLiveAPIClientConnection,
   MultimodalLiveClient,
-} from '../lib/multimodal-live-client'; // Ajuste o caminho
-import { arrayBufferToBase64 } from '../lib/utils'; // Ajuste o caminho
-import { LiveConfig, StreamingLog } from '../multimodal-live-types'; // Ajuste o caminho
+} from '../lib/multimodal-live-client';
+import { arrayBufferToBase64 } from '../lib/utils';
+// Remover imports não utilizados de Content e Part AQUI
+import { LiveConfig, StreamingLog } from '../multimodal-live-types';
 
 export type UseLiveAPIResults = {
   client: MultimodalLiveClient;
@@ -13,27 +14,22 @@ export type UseLiveAPIResults = {
   connected: boolean;
   isConnecting: boolean;
   error: Error | null;
-  volumeOut: number; // Volume de playback (0-1)
+  volumeOut: number;
   connect: () => Promise<void>;
   disconnect: () => void;
   setConfig: (config: LiveConfig) => void;
-  sendText: (text: string, turnComplete?: boolean) => void; // Helper para enviar texto
-  // Expor outros métodos do client se necessário (sendRealtimeInput, sendToolResponse)
+  sendText: (text: string, turnComplete?: boolean) => void;
 };
 
 const defaultInitialConfig: LiveConfig = {
-  // Use um modelo mais recente ou o específico que você precisa
-  model: 'models/gemini-2.0-flash-exp', // ou gemini-1.5-pro-latest
-  // Você pode definir um systemInstruction padrão aqui
-  // systemInstruction: { parts: [{ text: "You are a helpful vision assistant." }] },
+  model: 'models/gemini-2.0-flash-live-001', // Use o modelo desejado aqui
+  // model: 'models/gemini-2.0-flash-exp', // Se tiver certeza que é válido
   generationConfig: {
-    responseModalities: 'audio', // Padrão para resposta em áudio
-    // Configuração de voz padrão (opcional)
+    responseModalities: 'audio',
     speechConfig: {
-       voiceConfig: { prebuiltVoiceConfig: { voiceName: "Aoede" } } // Escolha uma voz
+       voiceConfig: { prebuiltVoiceConfig: { voiceName: "Aoede" } }
     }
   },
-  // tools: [] // Adicione ferramentas aqui se necessário
 };
 
 export function useLiveAPI(
@@ -43,21 +39,18 @@ export function useLiveAPI(
   const [connected, setConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<Error | null>(null);
-  const [volumeOut, setVolumeOut] = useState(0); // Volume de playback
+  const [volumeOut, setVolumeOut] = useState(0);
 
   const audioSoundRef = useRef<Audio.Sound | null>(null);
   const clientRef = useRef<MultimodalLiveClient | null>(null);
 
-
-  // Inicializa o cliente apenas uma vez
   if (!clientRef.current) {
+      console.log("Initializing MultimodalLiveClient...");
       clientRef.current = new MultimodalLiveClient(connectionParams);
   }
   const client = clientRef.current;
 
-
-  // --- Conexão ---
-
+  // --- Conexão --- (Mantém igual ao anterior)
   const connect = useCallback(async () => {
     if (connected || isConnecting) {
       console.log('Already connected or connecting.');
@@ -65,34 +58,36 @@ export function useLiveAPI(
     }
     setError(null);
     setIsConnecting(true);
-    console.log('Attempting connection with config:', config);
-
+    console.log('Attempting connection with config:', JSON.stringify(config));
     try {
       await client.connect(config);
-      // O estado 'connected' será definido pelo listener 'open' abaixo
     } catch (err: any) {
       console.error('Connection failed:', err);
       setError(err);
-      setConnected(false); // Garante que está desconectado
-    } finally {
-        setIsConnecting(false);
+      setConnected(false);
+      setIsConnecting(false);
     }
   }, [client, config, connected, isConnecting]);
 
   const disconnect = useCallback(() => {
+    // ... (igual ao anterior)
     console.log('Disconnect called');
-    client.disconnect(); // O listener 'close' cuidará de setConnected(false)
-    // Limpa o som ao desconectar
+    if (client) {
+        client.disconnect();
+    }
     if (audioSoundRef.current) {
         audioSoundRef.current.unloadAsync().catch(e => console.warn("Error unloading sound on disconnect:", e));
         audioSoundRef.current = null;
     }
     setVolumeOut(0);
+    setConnected(false);
+    setIsConnecting(false);
   }, [client]);
 
-  // --- Envio de Texto (Helper) ---
+  // --- Envio de Texto --- (Mantém igual ao anterior)
   const sendText = useCallback((text: string, turnComplete: boolean = true) => {
       if (client && connected) {
+          console.log(`SENDING TEXT: "${text}", turnComplete: ${turnComplete}`);
           client.send([{ text }], turnComplete);
       } else {
           console.warn("Cannot send text: Client not connected.");
@@ -101,59 +96,67 @@ export function useLiveAPI(
 
 
   // --- Playback de Áudio ---
-
   const playAudioChunk = useCallback(async (audioData: ArrayBuffer) => {
+    console.log(`PLAYBACK: Received ${audioData.byteLength} bytes of audio data. Attempting to play.`);
     try {
       const base64Data = arrayBufferToBase64(audioData);
-      const uri = `data:audio/mp3;base64,${base64Data}`; // Ou audio/pcm se for PCM
+      const uri = `data:audio/mpeg;base64,${base64Data}`;
 
-      // Se já houver um som tocando, descarregue-o primeiro
+      await Audio.setAudioModeAsync({
+           allowsRecordingIOS: true,
+           playsInSilentModeIOS: true,
+           interruptionModeIOS: InterruptionModeIOS.MixWithOthers,
+           interruptionModeAndroid: InterruptionModeAndroid.DuckOthers,
+           shouldDuckAndroid: true,
+           playThroughEarpieceAndroid: false,
+      });
+
       if (audioSoundRef.current) {
-        await audioSoundRef.current.unloadAsync();
-        audioSoundRef.current = null; // Limpa a referência
+        console.log("PLAYBACK: Unloading previous sound...");
+        await audioSoundRef.current.stopAsync().catch(e => console.warn("Minor error stopping previous sound:", e));
+        await audioSoundRef.current.unloadAsync().catch(e => console.warn("Minor error unloading previous sound:", e));
+        audioSoundRef.current = null;
       }
 
-
-      const { sound } = await Audio.Sound.createAsync(
+      console.log("PLAYBACK: Creating new sound object...");
+      const { sound } = await Audio.Sound.createAsync( // Removido status não utilizado
         { uri },
-        { shouldPlay: true, progressUpdateIntervalMillis: 100 } // Toca imediatamente
-        // { volume: 1.0 } // Volume inicial
+        { shouldPlay: true, progressUpdateIntervalMillis: 100 },
       );
 
-      audioSoundRef.current = sound; // Armazena a nova referência
+      console.log("PLAYBACK: Sound created successfully.");
+      audioSoundRef.current = sound;
 
-      sound.setOnPlaybackStatusUpdate((status) => {
-        if (!status.isLoaded) {
-          // Erro ou descarregado
+      sound.setOnPlaybackStatusUpdate((status: AVPlaybackStatus) => { // Tipo explícito
+        // --- CORREÇÃO AQUI ---
+        // Primeiro, verifica se o status indica que o áudio está carregado
+        if (status.isLoaded) {
+          // Dentro deste bloco, 'status' é do tipo AVPlaybackStatusLoaded
+          // e podemos acessar 'isPlaying' com segurança
+          if (status.isPlaying) {
+             setVolumeOut(0.8); // Simula volume
+          } else {
+             setVolumeOut(0);
+          }
+          // Verifica se acabou de terminar
+          if (status.didJustFinish) {
+             console.log("PLAYBACK: Playback finished.");
+             sound.unloadAsync().catch(e => console.warn("Minor error unloading finished sound:", e));
+             if (audioSoundRef.current === sound) {
+                 audioSoundRef.current = null;
+                 setVolumeOut(0);
+             }
+          }
+        } else {
+          // Se não está carregado (isLoaded é false), pode ser um erro
           if (status.error) {
             console.error(`Audio playback error: ${status.error}`);
             setError(new Error(`Audio playback error: ${status.error}`));
           }
-          // Se descarregou (ou terminou e foi descarregado), limpa a referência
+          // Garante que o volume e a ref sejam limpos se descarregar
           if (audioSoundRef.current === sound) {
              audioSoundRef.current = null;
              setVolumeOut(0);
-          }
-
-        } else {
-          // Tocando ou pausado
-          if (status.isPlaying) {
-            // Calcular um 'volume' simulado baseado em isPlaying
-            // Para um VU meter real, precisaríamos de análise de áudio
-             setVolumeOut(0.8); // Simula volume alto enquanto toca
-          } else {
-             setVolumeOut(0); // Volume zero se pausado ou finalizado
-          }
-
-          // Se a reprodução acabou
-          if (status.didJustFinish) {
-             // console.log("Audio playback finished.");
-             // Poderia descarregar aqui, mas vamos deixar descarregar antes de tocar o próximo
-             // sound.unloadAsync();
-             // if (audioSoundRef.current === sound) {
-             //     audioSoundRef.current = null;
-             //     setVolumeOut(0);
-             // }
           }
         }
       });
@@ -167,122 +170,38 @@ export function useLiveAPI(
            audioSoundRef.current = null;
       }
     }
-  }, []);
+  }, []); // Dependências vazias são ok aqui
 
-  // --- Efeitos para Lidar com Eventos do Cliente ---
+   // --- Efeitos para Lidar com Eventos do Cliente --- (Mantém igual ao anterior)
+   useEffect(() => {
+    if (!client) return;
 
+    const handleOpen = () => { /* ... */ setConnected(true); setIsConnecting(false); setError(null); console.log('>>> useLiveAPI: Connected event received.'); };
+    const handleClose = (event: CloseEvent | { code: number; reason: string }) => { /* ... */ if(connected) console.log('>>> useLiveAPI: Close event received. Was connected.'); setConnected(false); setIsConnecting(false); /* não limpa erro */ if (audioSoundRef.current) audioSoundRef.current.unloadAsync(); setVolumeOut(0); };
+    const handleError = (err: Error | Event) => { /* ... */ const errorObj = err instanceof Error ? err : new Error(`WebSocket error: ${err.type || 'Unknown'}`); console.error('>>> useLiveAPI: Error event received:', errorObj); setError(errorObj); };
+    const handleAudio = (data: ArrayBuffer) => { console.log(">>> useLiveAPI: Received 'audio' event, calling playAudioChunk."); playAudioChunk(data); };
+    const handleInterrupted = () => { /* ... */ console.log(">>> useLiveAPI: Interrupted event received."); if (audioSoundRef.current) audioSoundRef.current.stopAsync(); setVolumeOut(0); };
+    const handleLog = (log: StreamingLog) => { /* console.log("API Log:", log); */ };
+
+    console.log(">>> useLiveAPI: Adding event listeners to client.");
+    client.on('open', handleOpen);
+    client.on('close', handleClose);
+    client.on('error', handleError);
+    client.on('audio', handleAudio);
+    client.on('interrupted', handleInterrupted);
+    client.on('log', handleLog);
+
+    return () => { /* ... */ console.log(">>> useLiveAPI: Removing event listeners from client."); client.off('open', handleOpen); client.off('close', handleClose); client.off('error', handleError); client.off('audio', handleAudio); client.off('interrupted', handleInterrupted); client.off('log', handleLog); if (audioSoundRef.current) audioSoundRef.current.unloadAsync(); };
+  }, [client, playAudioChunk, disconnect, connected]);
+
+  // --- Configuração de áudio global do Expo --- (Mantém igual ao anterior)
   useEffect(() => {
-    const handleOpen = () => {
-      setConnected(true);
-      setIsConnecting(false);
-      setError(null); // Limpa erros anteriores na conexão bem-sucedida
-      console.log('LiveAPI Hook: Connected event received.');
-    };
-
-    const handleClose = (event: CloseEvent | { code: number; reason: string }) => {
-      setConnected(false);
-      setIsConnecting(false);
-      setError(null); // Limpa erro ao fechar normalmente
-      console.log('LiveAPI Hook: Close event received.');
-       // Limpeza de áudio ao fechar
-      if (audioSoundRef.current) {
-        audioSoundRef.current.unloadAsync().catch(e => console.warn("Error unloading sound on close:", e));
-        audioSoundRef.current = null;
-      }
-      setVolumeOut(0);
-    };
-
-    const handleError = (err: Error | Event) => {
-      const errorObj = err instanceof Error ? err : new Error(`WebSocket error: ${err.type}`);
-      console.error('LiveAPI Hook: Error event received:', errorObj);
-      setError(errorObj);
-      // Pode ser necessário desconectar ou tentar reconectar dependendo do erro
-      // disconnect(); // Desconectar em caso de erro?
-    };
-
-    const handleAudio = (data: ArrayBuffer) => {
-      playAudioChunk(data);
-    };
-
-    const handleInterrupted = () => {
-        console.log("LiveAPI Hook: Interrupted event received.");
-        // Parar áudio de saída
-        if (audioSoundRef.current) {
-            audioSoundRef.current.stopAsync().catch(e => console.warn("Error stopping sound on interrupt:", e));
-            // Não descarregar ainda, pode ser retomado
-        }
-        setVolumeOut(0);
-        // A lógica da UI pode precisar parar a gravação de entrada aqui também
-    };
-
-     const handleLog = (log: StreamingLog) => {
-       // console.log("API Log:", log); // Opcional: Logar tudo aqui
-     };
-
-     // --- Assinatura de eventos ---
-     client.on('open', handleOpen);
-     client.on('close', handleClose);
-     client.on('error', handleError);
-     client.on('audio', handleAudio);
-     client.on('interrupted', handleInterrupted);
-     client.on('log', handleLog);
-     // Adicione listeners para 'content', 'toolcall', etc. se precisar reagir a eles aqui
-
-     // --- Limpeza ---
-     return () => {
-        client.off('open', handleOpen);
-        client.off('close', handleClose);
-        client.off('error', handleError);
-        client.off('audio', handleAudio);
-        client.off('interrupted', handleInterrupted);
-        client.off('log', handleLog);
-
-        // Garante desconexão e limpeza ao desmontar o hook
-        // console.log("Cleaning up useLiveAPI hook");
-        // client.disconnect(); // Causa re-render se chamado diretamente aqui
-        // setTimeout(() => client.disconnect(), 0); // Adia desconexão
-        if (audioSoundRef.current) {
-            audioSoundRef.current.unloadAsync().catch(e => console.warn("Error unloading sound on hook cleanup:", e));
-            audioSoundRef.current = null;
-        }
-     };
-  }, [client, playAudioChunk, disconnect]); // Inclui disconnect se ele for usado na limpeza
-
-  // --- Configuração de áudio global do Expo ---
-  useEffect(() => {
-       const setupAudioMode = async () => {
-      try {
-        await Audio.setAudioModeAsync({
-          allowsRecordingIOS: true, // Necessário para gravação no iOS
-          playsInSilentModeIOS: true, // Permite tocar áudio mesmo no modo silencioso
-          // Use the imported enums
-          interruptionModeIOS: InterruptionModeIOS.MixWithOthers, // Use Enum
-          interruptionModeAndroid: InterruptionModeAndroid.DuckOthers, // Use Enum
-          shouldDuckAndroid: true,
-          playThroughEarpieceAndroid: false,
-        });
-         console.log("Audio mode set successfully."); // Add log
-      } catch (e) {
-        console.error("Failed to set audio mode", e);
-        setError(e as Error);
-      }
-    };
+    const setupAudioMode = async () => { /* ... */ console.log("Setting global audio mode..."); try { await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true, interruptionModeIOS: InterruptionModeIOS.MixWithOthers, interruptionModeAndroid: InterruptionModeAndroid.DuckOthers, shouldDuckAndroid: true, playThroughEarpieceAndroid: false, }); console.log("Audio mode set successfully."); } catch (e) { console.error("Failed to set audio mode", e); } };
     setupAudioMode();
-
-     // Limpeza do modo de áudio? Geralmente não é necessário.
-     // return () => { Audio.setAudioModeAsync({...defaults}); };
   }, []);
 
   return {
-    client,
-    config,
-    connected,
-    isConnecting,
-    error,
-    volumeOut,
-    connect,
-    disconnect,
-    setConfig,
-    sendText,
+    client, config, connected, isConnecting, error, volumeOut,
+    connect, disconnect, setConfig, sendText,
   };
 }

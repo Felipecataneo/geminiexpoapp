@@ -15,12 +15,11 @@
  */
 
 import type {
-    Content,
-    FunctionCall,
-    GenerationConfig,
-    GenerativeContentBlob,
-    Part,
-    Tool,
+  Content,
+  FunctionCall,
+  GenerationConfig,
+  GenerativeContentBlob,
+  Tool,
 } from "@google/generative-ai";
 
 /**
@@ -51,6 +50,7 @@ export type LiveGenerationConfig = GenerationConfig & {
     };
   };
 };
+export type { Content, Part } from "@google/generative-ai";
 
 export type LiveOutgoingMessage =
   | SetupMessage

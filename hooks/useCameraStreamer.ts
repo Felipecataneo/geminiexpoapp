@@ -1,43 +1,41 @@
 import {
-    CameraCapturedPicture,
-    Camera as CameraUtils,
-    CameraView,
-    PermissionResponse,
-    PermissionStatus
+  CameraCapturedPicture,
+  Camera as CameraUtils, // Static Utils
+  CameraView,
+  PermissionResponse, // Correct Permission Type
+  PermissionStatus
 } from 'expo-camera';
 import { useCallback, useEffect, useRef, useState } from 'react'; // Import React
-import { useLiveAPIContext } from '../contexts/LiveAPIContext';
+import { useLiveAPIContext } from '../contexts/LiveAPIContext'; // Para enviar dados
 
 export interface UseCameraStreamerResult {
   isStreaming: boolean;
-  // --- Accept the CameraView instance directly ---
-  startStreaming: (cameraInstance: CameraView) => void;
+  startStreaming: (cameraInstance: CameraView) => void; // Expects instance
   stopStreaming: () => void;
-  permissionResponse?: PermissionResponse;
+  permissionResponse?: PermissionResponse; // Correct type
   hasPermission: boolean | null;
   error: Error | null;
 }
 
-const FRAME_INTERVAL_MS = 1000;
-const IMAGE_QUALITY = 0.3;
+const FRAME_INTERVAL_MS = 1000; // Intervalo entre frames (1 segundo)
+const IMAGE_QUALITY = 0.3;      // Qualidade da imagem (0 a 1)
 
 export function useCameraStreamer(): UseCameraStreamerResult {
   const [isStreaming, setIsStreaming] = useState(false);
-  const [permissionResponse, setPermissionResponse] = useState<PermissionResponse>();
+  const [permissionResponse, setPermissionResponse] = useState<PermissionResponse>(); // Correct type
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
-  // Internal ref still holds the instance
-  const cameraRefInternal = useRef<CameraView | null>(null);
+  const cameraRefInternal = useRef<CameraView | null>(null); // Ref to instance
 
   const { client, connected } = useLiveAPIContext();
 
+  // --- Permissões ---
   const requestPermissions = useCallback(async () => {
-    // ... (permission logic remains the same)
     console.log('Requesting camera permissions...');
     setError(null);
     try {
-      const response = await CameraUtils.requestCameraPermissionsAsync();
+      const response = await CameraUtils.requestCameraPermissionsAsync(); // Use static utils
       setPermissionResponse(response);
       setHasPermission(response.status === PermissionStatus.GRANTED);
       if (response.status !== PermissionStatus.GRANTED) {
@@ -53,104 +51,124 @@ export function useCameraStreamer(): UseCameraStreamerResult {
     }
   }, []);
 
+  // Pede permissão ao montar
   useEffect(() => {
     requestPermissions();
   }, [requestPermissions]);
 
+
+  // --- Define stopStreaming FIRST ---
   const stopStreaming = useCallback(() => {
-    // ... (stopStreaming logic remains the same)
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
       intervalRef.current = null;
     }
+    // Only update state and log if it was actually streaming
     if (isStreaming) {
         console.log('Camera stream stopped.');
         setIsStreaming(false);
     }
+    // Clear the internal ref when stopping
     cameraRefInternal.current = null;
-  }, [isStreaming]);
+  }, [isStreaming]); // Depends only on isStreaming
 
+
+  // --- Define takePictureAndSend AFTER stopStreaming ---
   const takePictureAndSend = useCallback(async () => {
-    // ... (takePictureAndSend logic remains the same, uses cameraRefInternal)
-     if (!connected || !client || !cameraRefInternal.current || !isStreaming) {
-        if (!connected && isStreaming) {
-           console.warn("Stopping camera stream due to disconnection.");
-        }
+    const currentCamera = cameraRefInternal.current; // Capture ref value at start of call
+    if (!connected || !client || !currentCamera || !isStreaming) {
+      // Avoid logging spam if stream is just not active
+      // if (!connected && isStreaming) {
+      //    console.warn("Stopping camera stream due to disconnection.");
+      //    stopStreaming(); // Consider stopping if disconnected
+      // }
       return;
     }
+
     try {
-      if (!cameraRefInternal.current) {
-          console.warn("takePictureAndSend called but internal ref is null");
-          return;
-      }
-      const photo: CameraCapturedPicture | undefined = await cameraRefInternal.current.takePictureAsync({
+      // No need for null check here due to check above
+      const photo: CameraCapturedPicture | undefined = await currentCamera.takePictureAsync({
         quality: IMAGE_QUALITY,
         base64: true,
-        skipProcessing: true,
+        skipProcessing: true, // Generally okay for base64
       });
-      // ... (rest of takePictureAndSend)
-       if (photo?.base64) {
-        client.sendRealtimeInput([
-          { mimeType: 'image/jpeg', data: photo.base64 },
-        ]);
+
+      if (photo?.base64) {
+        const b64Length = photo.base64.length;
+        console.log(`VIDEO: Preparing to send frame (base64 length: ${b64Length}). MimeType: image/jpeg`); // Log antes
+        if(client) { // Double-check client
+            client.sendRealtimeInput([
+              { mimeType: 'image/jpeg', data: photo.base64 },
+            ]);
+            // console.log('VIDEO: Sent frame via client.'); // Log após (can be verbose)
+        } else {
+             console.warn("VIDEO: Client became unavailable before sending frame.");
+        }
       } else {
-         console.warn("takePictureAsync did not return base64 data.");
+         console.warn("VIDEO: takePictureAsync did not return base64 data.");
       }
     } catch (err: any) {
-      if (err.message?.includes('component could not be found') || err.message?.includes('unmounted')) {
+      // Check if the error is common (unmounted component) or unexpected
+       if (err.message?.includes('component could not be found') || err.message?.includes('unmounted')) {
           console.warn('Camera component likely unmounted during takePictureAsync.');
-      } else {
+       } else {
           console.error('Failed to take or send picture:', err);
-          setError(err);
-      }
+          setError(err); // Set error state only for unexpected errors
+       }
+      // Always attempt to stop streaming on ANY error during capture
       stopStreaming();
     }
-  }, [connected, client, isStreaming, stopStreaming]);
+    // stopStreaming is stable because its dependency (isStreaming) is managed by useState
+  }, [connected, client, isStreaming, stopStreaming]); // Include stopStreaming
 
 
-  // --- Change parameter to accept CameraView instance ---
+  // --- Controle do Stream ---
   const startStreaming = useCallback((cameraInstance: CameraView) => {
-     // No need to check cameraInstance here, the caller ensures it's not null
      if (!hasPermission) {
-      console.warn('Cannot start streaming: camera permission not granted.');
+      console.warn('Cannot start streaming: camera permission not granted. Requesting again...');
        requestPermissions();
-       if (!permissionResponse?.granted) {
+       // Check grant status from state AFTER requesting
+       if (!permissionResponse?.granted) { // Use optional chaining
             setError(new Error('Cannot start streaming without camera permission.'));
-            return;
+            return; // Exit if still not granted
        }
     }
     if (isStreaming || intervalRef.current) {
-      console.warn('Already streaming.');
-      return;
+      console.warn('Already streaming or interval exists.');
+       // Optionally clear existing interval if starting again somehow
+       if (intervalRef.current) clearInterval(intervalRef.current);
+      // return; // Decide if restart should be blocked or allowed
     }
-     // No need for the null check on cameraInstance here
 
     console.log('Starting camera stream...');
     setError(null);
-    // --- Assign the passed instance directly ---
-    cameraRefInternal.current = cameraInstance;
+    cameraRefInternal.current = cameraInstance; // Assign the passed instance
     setIsStreaming(true);
 
+    // Clear interval just before setting a new one (robustness)
     if (intervalRef.current) {
         clearInterval(intervalRef.current);
     }
 
-    takePictureAndSend();
+    // Tira uma foto imediatamente e depois inicia o intervalo
+    takePictureAndSend(); // Call the function (defined above)
     intervalRef.current = setInterval(takePictureAndSend, FRAME_INTERVAL_MS);
 
-  // Dependencies might change slightly if you remove reliance on external ref checks
   }, [hasPermission, isStreaming, takePictureAndSend, requestPermissions, permissionResponse]);
 
 
+  // --- Limpeza ---
   useEffect(() => {
+    // Return the cleanup function from the effect
     return () => {
-      stopStreaming();
+      console.log("Cleaning up camera streamer...");
+      stopStreaming(); // Call the stable stop function
     };
-  }, [stopStreaming]);
+  }, [stopStreaming]); // Ensure stopStreaming is stable
 
   return {
     isStreaming,
-    startStreaming, // Now expects CameraView instance
+    startStreaming,
     stopStreaming,
     permissionResponse,
     hasPermission,
