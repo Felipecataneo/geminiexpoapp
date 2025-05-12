@@ -1,14 +1,15 @@
-import { Camera } from 'expo-camera';
+// Import CameraView as the component and CameraType for type annotation
+import { CameraView } from 'expo-camera';
 import React, { forwardRef } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 interface CameraPreviewProps {
   hasPermission: boolean | null;
-  // Não precisa mais do onCameraReady, a ref é passada diretamente
 }
 
-// Usamos forwardRef para passar a ref para o componente Camera
-const CameraPreview = forwardRef<Camera, CameraPreviewProps>(
+// Use forwardRef to pass the ref to the CameraView component
+// Update the ref type to CameraView
+const CameraPreview = forwardRef<CameraView, CameraPreviewProps>(
     ({ hasPermission }, ref) => {
 
   if (hasPermission === null) {
@@ -20,10 +21,14 @@ const CameraPreview = forwardRef<Camera, CameraPreviewProps>(
 
   return (
     <View style={styles.container}>
-      <Camera style={styles.camera} type={Camera.Constants.Type.back} ref={ref} />
+      {/* Use CameraView component and the 'facing' prop with a string literal */}
+      <CameraView style={styles.camera} facing={'back'} ref={ref} />
     </View>
   );
 });
+
+// Add a display name for debugging purposes
+CameraPreview.displayName = 'CameraPreview';
 
 const styles = StyleSheet.create({
   container: {
@@ -33,7 +38,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   camera: {
-    ...StyleSheet.absoluteFillObject, // Faz a câmera preencher o container
+    ...StyleSheet.absoluteFillObject, // CameraView should fill the container
   },
    text: {
     color: 'white',

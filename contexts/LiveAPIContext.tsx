@@ -1,16 +1,17 @@
-import Constants from 'expo-constants';
 import React, {
-    createContext,
-    FC,
-    ReactNode,
-    useContext
+  createContext,
+  FC,
+  ReactNode,
+  useContext
 } from 'react';
+// Import React Native components for error display
+import { StyleSheet, Text, View } from 'react-native';
 import { useLiveAPI, UseLiveAPIResults } from '../hooks/useLiveAPI'; // Ajuste o caminho
 
 // Define um valor padrão ou nulo para o contexto inicial
 const defaultContextValue: UseLiveAPIResults = {
   client: null as any, // Será inicializado no hook
-  config: { model: 'models/gemini-1.5-flash-latest' }, // Modelo padrão inicial
+  config: { model: 'models/gemini-2.0-flash-exp' }, // Modelo padrão inicial
   connected: false,
   isConnecting: false,
   error: null,
@@ -25,24 +26,33 @@ const LiveAPIContext = createContext<UseLiveAPIResults>(defaultContextValue);
 
 export type LiveAPIProviderProps = {
   children: ReactNode;
-  // A API Key agora vem do app.config.js via Constants
 };
 
 export const LiveAPIProvider: FC<LiveAPIProviderProps> = ({ children }) => {
-  const apiKey = Constants.expoConfig?.extra?.EXPO_PUBLIC_GEMINI_API_KEY;
+  // --- Read API Key directly from process.env ---
+  // Expo CLI automatically loads .env variables starting with EXPO_PUBLIC_
+  // into process.env for client-side code.
+  const apiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
 
-  if (!apiKey || apiKey === 'EXPO_PUBLIC_GEMINI_API_KEY') {
-     // Renderiza um estado de erro ou aviso se a chave não estiver configurada
-     // Isso evita que useLiveAPI tente conectar sem chave.
-    console.error("FATAL: Gemini API Key not configured in app.config.js extra field.");
+  // --- Improved Check ---
+  if (!apiKey || apiKey === '' || apiKey.includes('YOUR_API_KEY')) { // Check if empty or placeholder
+    const errorMsg = "FATAL: Gemini API Key not configured. Please set EXPO_PUBLIC_GEMINI_API_KEY in your .env file.";
+    console.error(errorMsg);
+    // --- Render React Native Error View ---
     return (
-        <div style={{ padding: 20, backgroundColor: 'red', color: 'white' }}>
-            Error: Gemini API Key is missing. Please configure it in app.config.js
-        </div>
+        <View style={styles.errorContainer}>
+            <Text style={styles.errorTitle}>Configuration Error</Text>
+            <Text style={styles.errorText}>
+                Gemini API Key is missing or invalid.
+            </Text>
+            <Text style={styles.errorInstructions}>
+                Please ensure `EXPO_PUBLIC_GEMINI_API_KEY` is correctly set in your `.env` file in the project root and restart the app.
+            </Text>
+        </View>
     );
-    // Em RN seria um componente <View><Text>...</Text></View>
   }
 
+  // Pass the correctly retrieved apiKey to the hook
   const liveAPI = useLiveAPI({ apiKey });
 
   return (
@@ -52,13 +62,40 @@ export const LiveAPIProvider: FC<LiveAPIProviderProps> = ({ children }) => {
 
 export const useLiveAPIContext = () => {
   const context = useContext(LiveAPIContext);
+  // Keep the checks, they are still useful
   if (context === defaultContextValue) {
-      // Isso pode acontecer brevemente antes da inicialização, mas não deve persistir
     console.warn("LiveAPIContext accessed before provider initialization.");
   }
    if (!context) {
-    // Este erro é mais grave, indica falta do Provider
     throw new Error('useLiveAPIContext must be used within a LiveAPIProvider');
   }
   return context;
 };
+
+// --- Styles for Error View ---
+const styles = StyleSheet.create({
+    errorContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 20,
+        backgroundColor: '#ffcccc', // Light red background
+    },
+    errorTitle: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: '#cc0000', // Dark red text
+        marginBottom: 10,
+    },
+    errorText: {
+        fontSize: 16,
+        color: '#cc0000',
+        textAlign: 'center',
+        marginBottom: 15,
+    },
+    errorInstructions: {
+        fontSize: 14,
+        color: '#800000', // Darker red/brown
+        textAlign: 'center',
+    }
+});

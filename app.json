@@ -57,7 +57,7 @@
       "typedRoutes": true 
     },
     "extra": {
-      "GEMINI_API_KEY": "EXPO_PUBLIC_GEMINI_API_KEY", 
+
       "eas": {
         "projectId": "your_project_id" 
       }

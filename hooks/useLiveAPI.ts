@@ -1,8 +1,8 @@
-import { Audio } from 'expo-av';
+import { Audio, InterruptionModeAndroid, InterruptionModeIOS } from 'expo-av';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-    MultimodalLiveAPIClientConnection,
-    MultimodalLiveClient,
+  MultimodalLiveAPIClientConnection,
+  MultimodalLiveClient,
 } from '../lib/multimodal-live-client'; // Ajuste o caminho
 import { arrayBufferToBase64 } from '../lib/utils'; // Ajuste o caminho
 import { LiveConfig, StreamingLog } from '../multimodal-live-types'; // Ajuste o caminho
@@ -23,7 +23,7 @@ export type UseLiveAPIResults = {
 
 const defaultInitialConfig: LiveConfig = {
   // Use um modelo mais recente ou o específico que você precisa
-  model: 'models/gemini-1.5-flash-latest', // ou gemini-1.5-pro-latest
+  model: 'models/gemini-2.0-flash-exp', // ou gemini-1.5-pro-latest
   // Você pode definir um systemInstruction padrão aqui
   // systemInstruction: { parts: [{ text: "You are a helpful vision assistant." }] },
   generationConfig: {
@@ -250,18 +250,18 @@ export function useLiveAPI(
 
   // --- Configuração de áudio global do Expo ---
   useEffect(() => {
-    const setupAudioMode = async () => {
+       const setupAudioMode = async () => {
       try {
         await Audio.setAudioModeAsync({
           allowsRecordingIOS: true, // Necessário para gravação no iOS
           playsInSilentModeIOS: true, // Permite tocar áudio mesmo no modo silencioso
-          // interruptionModeIOS: Audio.INTERRUPTION_MODE_IOS_DO_NOT_MIX,
-          interruptionModeIOS: Audio.INTERRUPTION_MODE_IOS_MIX_WITH_OTHERS, // Ou outra opção
-          // interruptionModeAndroid: Audio.INTERRUPTION_MODE_ANDROID_DO_NOT_MIX,
-          interruptionModeAndroid: Audio.INTERRUPTION_MODE_ANDROID_DUCK_OTHERS, // Ou outra opção
+          // Use the imported enums
+          interruptionModeIOS: InterruptionModeIOS.MixWithOthers, // Use Enum
+          interruptionModeAndroid: InterruptionModeAndroid.DuckOthers, // Use Enum
           shouldDuckAndroid: true,
           playThroughEarpieceAndroid: false,
         });
+         console.log("Audio mode set successfully."); // Add log
       } catch (e) {
         console.error("Failed to set audio mode", e);
         setError(e as Error);
