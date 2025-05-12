@@ -4,39 +4,64 @@
     "slug": "GeminiVisionAssistant",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/images/icon.png", 
     "scheme": "geminivisionassistant",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
+    "splash": { 
+      "image": "./assets/images/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "assetBundlePatterns": ["**/*"], 
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.yourcompany.geminivisionassistant",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Allow $(PRODUCT_NAME) to access your camera for visual analysis.",
+        "NSMicrophoneUsageDescription": "Allow $(PRODUCT_NAME) to record audio for voice commands."
+      }
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "foregroundImage": "./assets/images/adaptive-icon.png", 
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true
+      "permissions": [ 
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ],
+      "package": "com.yourcompany.geminivisionassistant", 
+      "edgeToEdgeEnabled": true 
     },
     "web": {
       "bundler": "metro",
       "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/images/favicon.png" 
     },
     "plugins": [
-      "expo-router",
-      [
-        "expo-splash-screen",
+      "expo-router", 
+      [ 
+        "expo-camera",
         {
-          "image": "./assets/images/splash-icon.png",
-          "imageWidth": 200,
-          "resizeMode": "contain",
-          "backgroundColor": "#ffffff"
+          "cameraPermission": "Allow $(PRODUCT_NAME) to access your camera."
+        }
+      ],
+      [ 
+        "expo-av",
+        {
+          "microphonePermission": "Allow $(PRODUCT_NAME) to access your microphone."
         }
       ]
     ],
     "experiments": {
-      "typedRoutes": true
+      "typedRoutes": true 
+    },
+    "extra": {
+      "GEMINI_API_KEY": "EXPO_PUBLIC_GEMINI_API_KEY", 
+      "eas": {
+        "projectId": "your_project_id" 
+      }
     }
+    
   }
 }
